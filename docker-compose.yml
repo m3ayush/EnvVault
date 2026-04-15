@@ -1,0 +1,69 @@
+services:
+  # ── React Frontend (nginx) ─────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./envvault-web
+      args:
+        VITE_API_URL: ""  # empty = use nginx proxy (relative /api/)
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - envvault-net
+    restart: unless-stopped
+
+  # ── Node.js Backend API ────────────────────────────────────────────────────
+  backend:
+    build: ./envvault-backend
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - ML_SERVICE_URL=http://ml-service:8000
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+    volumes:
+      - backend-data:/app/data
+    depends_on:
+      - ml-service
+    networks:
+      - envvault-net
+    restart: unless-stopped
+
+  # ── Python ML Service (Flask + IsolationForest) ────────────────────────────
+  ml-service:
+    build: ./envvault-ml
+    ports:
+      - "8000:8000"
+    environment:
+      - ML_SERVICE_PORT=8000
+      - MLFLOW_TRACKING_URI=http://mlflow:5050
+    networks:
+      - envvault-net
+    restart: unless-stopped
+
+  # ── MLflow Tracking Server ─────────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5050
+      --backend-store-uri /mlflow/mlruns
+      --default-artifact-root /mlflow/mlartifacts
+    ports:
+      - "5050:5050"
+    volumes:
+      - ./envvault-ml/mlruns:/mlflow/mlruns
+      - ./envvault-ml/mlartifacts:/mlflow/mlartifacts
+    networks:
+      - envvault-net
+    restart: unless-stopped
+
+volumes:
+  backend-data:
+
+networks:
+  envvault-net:
+    driver: bridge

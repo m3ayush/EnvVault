@@ -1,0 +1,51 @@
+version: 0.2
+
+# AWS CodeBuild buildspec — builds and pushes all 3 Docker images to ECR
+
+env:
+  variables:
+    AWS_DEFAULT_REGION: ap-south-1
+    ENV_NAME: envvault
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - ECR_URI=$ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_URI
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:-latest}
+
+  build:
+    commands:
+      - echo Building Docker images...
+
+      # Backend
+      - echo Building backend...
+      - docker build -t $ENV_NAME/backend ./envvault-backend
+      - docker tag $ENV_NAME/backend:latest $ECR_URI/$ENV_NAME/backend:$IMAGE_TAG
+      - docker tag $ENV_NAME/backend:latest $ECR_URI/$ENV_NAME/backend:latest
+
+      # ML Service
+      - echo Building ml-service...
+      - docker build -t $ENV_NAME/ml-service ./envvault-ml
+      - docker tag $ENV_NAME/ml-service:latest $ECR_URI/$ENV_NAME/ml-service:$IMAGE_TAG
+      - docker tag $ENV_NAME/ml-service:latest $ECR_URI/$ENV_NAME/ml-service:latest
+
+      # Frontend
+      - echo Building frontend...
+      - docker build -t $ENV_NAME/frontend ./envvault-web
+      - docker tag $ENV_NAME/frontend:latest $ECR_URI/$ENV_NAME/frontend:$IMAGE_TAG
+      - docker tag $ENV_NAME/frontend:latest $ECR_URI/$ENV_NAME/frontend:latest
+
+  post_build:
+    commands:
+      - echo Pushing images to ECR...
+      - docker push $ECR_URI/$ENV_NAME/backend:$IMAGE_TAG
+      - docker push $ECR_URI/$ENV_NAME/backend:latest
+      - docker push $ECR_URI/$ENV_NAME/ml-service:$IMAGE_TAG
+      - docker push $ECR_URI/$ENV_NAME/ml-service:latest
+      - docker push $ECR_URI/$ENV_NAME/frontend:$IMAGE_TAG
+      - docker push $ECR_URI/$ENV_NAME/frontend:latest
+      - echo Build and push completed on $(date)

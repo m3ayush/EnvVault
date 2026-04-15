@@ -1,0 +1,113 @@
+name: EnvVault CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_BACKEND: envvault/backend
+  ECR_ML_SERVICE: envvault/ml-service
+  ECR_FRONTEND: envvault/frontend
+  ECS_CLUSTER: envvault-cluster
+
+jobs:
+  # ── BUILD & TEST ──────────────────────────────────────────────────────────
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install backend dependencies
+        run: cd envvault-backend && npm ci
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ML dependencies
+        run: |
+          cd envvault-ml
+          pip install -r requirements.txt
+
+      - name: Test ML model loading
+        run: |
+          cd envvault-ml
+          python -c "import joblib; model = joblib.load('model.pkl'); print('Model loaded OK')"
+
+      - name: Build frontend
+        run: cd envvault-web && npm ci && npm run build
+
+      - name: Build Docker images
+        run: |
+          docker build -t envvault/backend ./envvault-backend
+          docker build -t envvault/ml-service ./envvault-ml
+          docker build -t envvault/frontend ./envvault-web
+
+      - name: Docker Compose smoke test
+        run: |
+          docker compose up -d backend ml-service
+          sleep 10
+          curl -f http://localhost:3001/api/health || exit 1
+          curl -f http://localhost:8000/health || exit 1
+          docker compose down
+
+  # ── DEPLOY TO AWS (only on push to main) ──────────────────────────────────
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push images to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Backend
+          docker build -t $ECR_REGISTRY/$ECR_BACKEND:$IMAGE_TAG ./envvault-backend
+          docker tag $ECR_REGISTRY/$ECR_BACKEND:$IMAGE_TAG $ECR_REGISTRY/$ECR_BACKEND:latest
+          docker push $ECR_REGISTRY/$ECR_BACKEND:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_BACKEND:latest
+
+          # ML Service
+          docker build -t $ECR_REGISTRY/$ECR_ML_SERVICE:$IMAGE_TAG ./envvault-ml
+          docker tag $ECR_REGISTRY/$ECR_ML_SERVICE:$IMAGE_TAG $ECR_REGISTRY/$ECR_ML_SERVICE:latest
+          docker push $ECR_REGISTRY/$ECR_ML_SERVICE:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_ML_SERVICE:latest
+
+          # Frontend
+          docker build -t $ECR_REGISTRY/$ECR_FRONTEND:$IMAGE_TAG ./envvault-web
+          docker tag $ECR_REGISTRY/$ECR_FRONTEND:$IMAGE_TAG $ECR_REGISTRY/$ECR_FRONTEND:latest
+          docker push $ECR_REGISTRY/$ECR_FRONTEND:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_FRONTEND:latest
+
+      - name: Update ECS services
+        run: |
+          aws ecs update-service --cluster $ECS_CLUSTER --service envvault-backend --force-new-deployment
+          aws ecs update-service --cluster $ECS_CLUSTER --service envvault-frontend --force-new-deployment
