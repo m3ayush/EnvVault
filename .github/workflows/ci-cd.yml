@@ -104,7 +104,9 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_FRONTEND:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_FRONTEND:latest
 
-      - name: Update ECS services
-        run: |
-          aws ecs update-service --cluster $ECS_CLUSTER --service envvault-backend --force-new-deployment
-          aws ecs update-service --cluster $ECS_CLUSTER --service envvault-frontend --force-new-deployment
+      # Update ECS services — disabled (requires CloudFormation stack deployed)
+      # Uncomment after running: aws cloudformation create-stack --stack-name envvault ...
+      # - name: Update ECS services
+      #   run: |
+      #     aws ecs update-service --cluster $ECS_CLUSTER --service envvault-backend --force-new-deployment
+      #     aws ecs update-service --cluster $ECS_CLUSTER --service envvault-frontend --force-new-deployment
