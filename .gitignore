@@ -9,3 +9,9 @@ mlruns/
 mlartifacts/
 *.log
 .DS_Store
+
+# Test artifacts
+tests/test-db.json
+coverage/
+.pytest_cache/
+htmlcov/

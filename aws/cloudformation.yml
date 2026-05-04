@@ -126,6 +126,15 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-ecs-sg
 
+  ECSServiceToMLIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ECSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8000
+      ToPort: 8000
+      SourceSecurityGroupId: !Ref ECSSecurityGroup
+
   # ── ECR REPOSITORIES ──────────────────────────────────────────────────────
 
   BackendRepo:
@@ -174,6 +183,26 @@ Resources:
       ClusterSettings:
         - Name: containerInsights
           Value: enabled
+
+  PrivateDNSNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Sub ${EnvironmentName}.local
+      Vpc: !Ref VPC
+      Description: Internal service discovery namespace for EnvVault ECS services
+
+  MLDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: ml-service
+      NamespaceId: !Ref PrivateDNSNamespace
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - Type: A
+            TTL: 10
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
 
   # ── IAM ROLES ─────────────────────────────────────────────────────────────
 
@@ -298,7 +327,7 @@ Resources:
             - Name: PORT
               Value: "3001"
             - Name: ML_SERVICE_URL
-              Value: http://localhost:8000
+              Value: !Sub http://ml-service.${EnvironmentName}.local:8000
             - Name: ENCRYPTION_KEY
               Value: !Ref EncryptionKey
           LogConfiguration:
@@ -400,6 +429,25 @@ Resources:
           ContainerPort: 80
           TargetGroupArn: !Ref FrontendTargetGroup
 
+  MLService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-ml-service
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref MLServiceTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      ServiceRegistries:
+        - RegistryArn: !GetAtt MLDiscoveryService.Arn
+
   # ── CLOUDWATCH LOG GROUPS ─────────────────────────────────────────────────
 
   BackendLogGroup:
@@ -419,6 +467,74 @@ Resources:
     Properties:
       LogGroupName: !Sub /ecs/${EnvironmentName}/frontend
       RetentionInDays: 14
+
+  # ── AUTO-SCALING ─────────────────────────────────────────────────────────
+
+  BackendScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 4
+      MinCapacity: 1
+      ResourceId: !Sub service/${ECSCluster}/${BackendService.Name}
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  BackendScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-backend-cpu-scaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref BackendScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+
+  FrontendScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 3
+      MinCapacity: 1
+      ResourceId: !Sub service/${ECSCluster}/${FrontendService.Name}
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  FrontendScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-frontend-cpu-scaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref FrontendScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+
+  # ── CLOUDWATCH ALARMS ────────────────────────────────────────────────────
+
+  BackendHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-backend-high-cpu
+      AlarmDescription: Backend CPU utilization exceeds 80% for 5 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSCluster
+        - Name: ServiceName
+          Value: !GetAtt BackendService.Name
 
 # ── OUTPUTS ─────────────────────────────────────────────────────────────────
 

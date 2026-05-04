@@ -16,6 +16,11 @@ export default function Header({ userRole, setUserRole }) {
         {userRole === 'admin' && (
           <Link to="/audit-logs" className={location.pathname === '/audit-logs' ? 'active' : ''}>Audit Logs</Link>
         )}
+        <Link to="/testing" className={location.pathname === '/testing' ? 'active' : ''}>Testing</Link>
+        <Link to="/monitoring" className={location.pathname === '/monitoring' ? 'active' : ''}>Monitoring</Link>
+        <Link to="/scalability" className={location.pathname === '/scalability' ? 'active' : ''}>Scaling</Link>
+        <Link to="/deployment" className={location.pathname === '/deployment' ? 'active' : ''}>Deploy</Link>
+        <Link to="/risk" className={location.pathname === '/risk' ? 'active' : ''}>Risk</Link>
       </nav>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>

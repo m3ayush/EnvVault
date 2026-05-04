@@ -11,6 +11,78 @@ const { checkAnomaly } = require('./services/mlService');
 
 const app = express();
 
+// -- PROMETHEUS METRICS -------------------------------------------------------
+
+let promClient;
+let httpRequestCount, httpRequestDuration, activeRequests, anomalyCounter;
+
+try {
+  promClient = require('prom-client');
+
+  // Create a Registry
+  const register = new promClient.Registry();
+  promClient.collectDefaultMetrics({ register });
+
+  // Custom metrics
+  httpRequestCount = new promClient.Counter({
+    name: 'envvault_http_requests_total',
+    help: 'Total number of HTTP requests',
+    labelNames: ['method', 'route', 'status_code'],
+    registers: [register],
+  });
+
+  httpRequestDuration = new promClient.Histogram({
+    name: 'envvault_http_request_duration_seconds',
+    help: 'HTTP request duration in seconds',
+    labelNames: ['method', 'route', 'status_code'],
+    buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+    registers: [register],
+  });
+
+  activeRequests = new promClient.Gauge({
+    name: 'envvault_active_requests',
+    help: 'Number of currently active requests',
+    registers: [register],
+  });
+
+  anomalyCounter = new promClient.Counter({
+    name: 'envvault_anomalies_detected_total',
+    help: 'Total number of anomalies detected by ML service',
+    labelNames: ['action', 'user_role'],
+    registers: [register],
+  });
+
+  // Metrics middleware
+  app.use((req, res, next) => {
+    if (req.path === '/metrics') return next();
+    if (activeRequests) activeRequests.inc();
+    const start = process.hrtime.bigint();
+
+    res.on('finish', () => {
+      if (activeRequests) activeRequests.dec();
+      const duration = Number(process.hrtime.bigint() - start) / 1e9;
+      const route = req.route ? req.route.path : req.path;
+      if (httpRequestCount) httpRequestCount.inc({ method: req.method, route, status_code: res.statusCode });
+      if (httpRequestDuration) httpRequestDuration.observe({ method: req.method, route, status_code: res.statusCode }, duration);
+    });
+    next();
+  });
+
+  // Metrics endpoint for Prometheus scraping
+  app.get('/metrics', async (req, res) => {
+    try {
+      res.set('Content-Type', register.contentType);
+      res.end(await register.metrics());
+    } catch (err) {
+      res.status(500).end(err.message);
+    }
+  });
+
+  console.log('[METRICS] Prometheus metrics available at /metrics');
+} catch (e) {
+  console.log('[METRICS] prom-client not installed, metrics disabled');
+}
+
 // -- SECURITY MIDDLEWARE -----------------------------------------------------
 
 app.use(helmet());
@@ -81,6 +153,11 @@ async function createAuditLog(db, logData) {
     log.is_anomaly = prediction.is_anomaly || false;
     log.anomaly_score = prediction.anomaly_score || null;
     log.anomaly_confidence = prediction.confidence_pct || null;
+
+    // Track anomaly metrics for Prometheus
+    if (log.is_anomaly && anomalyCounter) {
+      anomalyCounter.inc({ action: log.action, user_role: log.userRole });
+    }
   }
 
   db.auditLogs.push(log);
@@ -292,9 +369,16 @@ app.get('/api/secrets/raw', (req, res) => {
 // -- START SERVER ------------------------------------------------------------
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`\n  EnvVault Backend running on http://localhost:${PORT}`);
-  console.log(`  Database: ${DB_FILE}`);
-  console.log(`  Encryption: AES-256-GCM`);
-  console.log(`  ML Service: ${process.env.ML_SERVICE_URL || 'http://localhost:8000'}\n`);
-});
+
+// Only start server if this file is run directly (not imported by tests)
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`\n  EnvVault Backend running on http://localhost:${PORT}`);
+    console.log(`  Database: ${DB_FILE}`);
+    console.log(`  Encryption: AES-256-GCM`);
+    console.log(`  ML Service: ${process.env.ML_SERVICE_URL || 'http://localhost:8000'}\n`);
+  });
+}
+
+// Export for testing
+module.exports = app;

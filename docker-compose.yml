@@ -8,10 +8,17 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - envvault-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ── Node.js Backend API ────────────────────────────────────────────────────
   backend:
@@ -26,10 +33,17 @@ services:
     volumes:
       - backend-data:/app/data
     depends_on:
-      - ml-service
+      ml-service:
+        condition: service_healthy
     networks:
       - envvault-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ── Python ML Service (Flask + IsolationForest) ────────────────────────────
   ml-service:
@@ -42,6 +56,12 @@ services:
     networks:
       - envvault-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # ── MLflow Tracking Server ─────────────────────────────────────────────────
   mlflow:
@@ -61,8 +81,48 @@ services:
       - envvault-net
     restart: unless-stopped
 
+  # ── Prometheus (Metrics Collection) ────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - envvault-net
+    restart: unless-stopped
+
+  # ── Grafana (Visualization Dashboard) ──────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports:
+      - "3002:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=envvault
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - envvault-net
+    restart: unless-stopped
+
 volumes:
   backend-data:
+  prometheus-data:
+  grafana-data:
 
 networks:
   envvault-net:

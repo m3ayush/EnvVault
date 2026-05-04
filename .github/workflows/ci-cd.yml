@@ -21,6 +21,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ── Node.js Backend ─────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -29,6 +30,13 @@ jobs:
       - name: Install backend dependencies
         run: cd envvault-backend && npm ci
 
+      - name: Run backend unit tests
+        run: cd envvault-backend && npm test
+
+      - name: Backend dependency audit
+        run: cd envvault-backend && npm audit --audit-level=moderate || true
+
+      # ── Python ML Service ──────────────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -44,9 +52,19 @@ jobs:
           cd envvault-ml
           python -c "import joblib; model = joblib.load('model.pkl'); print('Model loaded OK')"
 
+      - name: Run ML service tests
+        run: |
+          cd envvault-ml
+          python -m pytest tests/ -v --tb=short
+
+      - name: ML dependency audit
+        run: pip audit 2>/dev/null || echo "pip-audit not installed, skipping"
+
+      # ── Frontend ───────────────────────────────────────────────────────
       - name: Build frontend
         run: cd envvault-web && npm ci && npm run build
 
+      # ── Docker Build & Smoke Test ──────────────────────────────────────
       - name: Build Docker images
         run: |
           docker build -t envvault/backend ./envvault-backend
@@ -59,6 +77,7 @@ jobs:
           sleep 10
           curl -f http://localhost:3001/api/health || exit 1
           curl -f http://localhost:8000/health || exit 1
+          echo "--- Smoke tests passed ---"
           docker compose down
 
   # ── DEPLOY TO AWS (only on push to main) ──────────────────────────────────

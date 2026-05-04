@@ -13,13 +13,15 @@ if [ "$1" = "docker" ]; then
   cd "$ROOT_DIR"
   docker compose up --build -d
   echo ""
-  echo "=========================================="
+  echo "==========================================="
   echo "  EnvVault is running! (Docker mode)"
-  echo "  Frontend:  http://localhost:3000"
-  echo "  Backend:   http://localhost:3001"
-  echo "  ML Service: http://localhost:8000"
-  echo "  MLflow UI:  http://localhost:5050"
-  echo "=========================================="
+  echo "  Frontend:    http://localhost:3000"
+  echo "  Backend:     http://localhost:3001"
+  echo "  ML Service:  http://localhost:8000"
+  echo "  MLflow UI:   http://localhost:5050"
+  echo "  Grafana:     http://localhost:3002  (admin/envvault)"
+  echo "  Prometheus:  http://localhost:9090"
+  echo "==========================================="
   echo ""
   echo "View logs:  docker compose logs -f"
   echo "Stop all:   docker compose down"
@@ -41,7 +43,9 @@ sleep 1
 # Start ML Service
 echo "  Starting ML Service (port 8000)..."
 cd "$ROOT_DIR/envvault-ml"
-if [ ! -d "venv" ]; then
+if [ -d ".venv" ]; then
+  source .venv/bin/activate
+elif [ ! -d "venv" ]; then
   python3 -m venv venv
   source venv/bin/activate
   pip install -r requirements.txt -q
