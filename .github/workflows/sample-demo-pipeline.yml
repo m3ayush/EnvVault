@@ -1,0 +1,65 @@
+name: EnvVault Sample Demo Pipeline
+
+# This is a simple demonstration pipeline for explaining the CI/CD flow.
+# The main production-style workflow is in .github/workflows/ci-cd.yml.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-build-and-smoke-test:
+    name: Validate, Build, and Smoke Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install backend dependencies
+        run: cd envvault-backend && npm ci
+
+      - name: Run backend tests
+        run: cd envvault-backend && npm test
+
+      - name: Build frontend
+        run: cd envvault-web && npm ci && npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ML dependencies
+        run: cd envvault-ml && pip install -r requirements.txt
+
+      - name: Run ML tests
+        run: cd envvault-ml && python -m pytest tests/ -v
+
+      - name: Build Docker images
+        run: |
+          docker build -t envvault-backend-demo ./envvault-backend
+          docker build -t envvault-ml-demo ./envvault-ml
+          docker build -t envvault-frontend-demo ./envvault-web
+
+      - name: Start backend and ML services
+        run: |
+          docker compose up -d backend ml-service
+          sleep 15
+
+      - name: Smoke test backend
+        run: curl -f http://localhost:3001/api/health
+
+      - name: Smoke test ML service
+        run: curl -f http://localhost:8000/health
+
+      - name: Stop services
+        if: always()
+        run: docker compose down
+
